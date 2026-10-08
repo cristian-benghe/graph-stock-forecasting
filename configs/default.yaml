@@ -1,0 +1,72 @@
+data:
+  # Semiconductor companies
+  semiconductors:
+    - NVDA   # NVIDIA
+    - AMD    # AMD
+    - INTC   # Intel
+    - AVGO   # Broadcom
+    - QCOM   # Qualcomm
+    - AMAT   # Applied Materials
+    - LRCX   # Lam Research
+    - KLAC   # KLA
+    - TSM    # TSMC
+    - ASML   # ASML
+
+  # Agriculture companies
+  agriculture:
+    - DE     # Deere & Company
+    - CTVA   # Corteva
+    - NTR    # Nutrien
+    - ADM    # Archer Daniels Midland
+    - BG     # Bunge
+    - MOS    # Mosaic
+    - TSN    # Tyson Foods
+    - ANDE   # Andersons
+    - FMC    # FMC Corp
+    - CF     # CF Industries
+
+  start_date: "2015-01-01"
+  end_date: "2026-09-01"
+
+features:
+  window_size: 20        # trading days lookback
+  horizon: 1             # predict 1 day ahead
+  volatility_window: 20  # rolling vol window
+  features_per_node: 3   # log_return, volatility, volume
+
+split:
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+mtgnn:
+  node_dim: 40           # trainable node embedding dim
+  hidden_channels: 32
+  num_layers: 3
+  temporal_kernel: 3
+  dropout: 0.3
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  epochs: 100
+  batch_size: 32
+  top_k: 10              # sparsify learned graph to top-k edges per node
+
+lstm:
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.2
+  learning_rate: 0.001
+  epochs: 100
+  batch_size: 32
+
+cmaes:
+  sigma0: 0.5
+  max_iterations: 500
+  population_size: 20
+
+evaluation:
+  metrics:
+    - mae
+    - rmse
+    - directional_accuracy
+  seeds: [42, 123, 456]
