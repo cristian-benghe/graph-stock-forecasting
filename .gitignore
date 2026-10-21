@@ -16,8 +16,8 @@ build/
 venv/
 env/
 
-# Data (downloaded at runtime)
-data/
+# Data (downloaded at runtime) - root only, not src/data/
+/data/
 
 # Experiment outputs
 outputs/
