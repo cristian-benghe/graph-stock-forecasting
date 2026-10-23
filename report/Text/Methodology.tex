@@ -1,0 +1,86 @@
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Data and graph construction}
+
+We collect daily split- and dividend-adjusted closing prices and trading volumes for 20 companies from Yahoo Finance via the \texttt{yfinance} library. The universe is split evenly between two industries and chosen to span different parts of each value chain rather than only the largest firms by market capitalisation.
+
+\textbf{Semiconductors (10):} NVIDIA (NVDA), AMD (AMD), Intel (INTC), Broadcom (AVGO), Qualcomm (QCOM), Applied Materials (AMAT), Lam Research (LRCX), KLA (KLAC), TSMC (TSM), ASML (ASML). These cover fabless designers, an integrated manufacturer, a pure-play foundry and capital-equipment suppliers.
+
+\textbf{Agriculture (10):} Deere (DE), Corteva (CTVA), Nutrien (NTR), Archer Daniels Midland (ADM), Bunge (BG), Mosaic (MOS), Tyson Foods (TSN), Andersons (ANDE), FMC (FMC), CF Industries (CF). These cover equipment, seeds and crop protection, fertilisers, crop processing and protein.
+
+\paragraph{Usable sample window.} Two agriculture names postdate our intended 2015 start: Nutrien was formed by the January 2018 Agrium/PotashCorp merger, and Corteva was spun off from DowDuPont in May 2019. Rather than impute prices for companies that did not yet trade, we restrict the panel to the window in which all 20 series exist, which begins 24 May 2019. After the rolling-feature warm-up this yields \textbf{1{,}806 trading days} (25 June 2019 to 31 August 2026) with no missing values. This is a deliberate trade-off: keeping the company universe specified in our proposal costs roughly four years of history for the other 18 names. The resulting sample still spans the COVID-19 crash, the 2021--22 inflation and rate-hike cycle and the subsequent AI-driven semiconductor rally, so it contains more than one market regime.
+
+\paragraph{Node features.} For each company $i$ and day $t$ we compute three features from information available strictly before the prediction time:
+\begin{align}
+r_i^{(t)} &= \log\!\left(P_i^{(t)} / P_i^{(t-1)}\right) && \text{log return}\\
+\sigma_i^{(t)} &= \operatorname{std}\!\left(r_i^{(t-19)}, \ldots, r_i^{(t)}\right) && \text{20-day rolling volatility}\\
+\tilde{v}_i^{(t)} &= \left(v_i^{(t)} - \mu_{v,i}^{(t)}\right) / \varsigma_{v,i}^{(t)} && \text{volume z-score vs.\ its own 20-day window}
+\end{align}
+where $\mu_{v,i}^{(t)}$ and $\varsigma_{v,i}^{(t)}$ are trailing 20-day mean and standard deviation of volume. All three are causal by construction.
+
+We verified the resulting features for plausibility. Annualised volatilities range from 0.295 (TSN) to 0.550 (AMD), with semiconductors systematically more volatile than agriculture, and the largest single-day moves correspond to identifiable events (Intel $-26\%$ on 2 August 2024 after suspending its dividend; ADM $-24\%$ on 22 January 2024 amid an accounting investigation), confirming that the adjustment for splits is correct and that extreme values are genuine rather than data artefacts.
+
+\paragraph{Prediction task.} Given a window of $W = 20$ trading days of all three features across all 20 nodes, $\mathbf{X}^{(t)} \in \mathbb{R}^{20 \times 20 \times 3}$, the model predicts the next-day log return at every node, $\mathbf{y}^{(t+1)} \in \mathbb{R}^{20}$.
+
+\subsection{Primary model: MTGNN}
+
+Our primary model follows MTGNN \parencite{wu2020mtgnn} and has three components.
+
+\paragraph{Graph learning layer.} Two embedding matrices $\mathbf{E}_1, \mathbf{E}_2 \in \mathbb{R}^{N \times d}$ ($d = 40$) are trainable parameters. The adjacency is
+\begin{equation}
+\mathbf{M}_1 = \tanh(\alpha \mathbf{E}_1 \mathbf{W}_1), \quad
+\mathbf{M}_2 = \tanh(\alpha \mathbf{E}_2 \mathbf{W}_2), \quad
+\mathbf{A} = \operatorname{ReLU}\!\left(\tanh\!\left(\alpha\left(\mathbf{M}_1\mathbf{M}_2^{\top} - \mathbf{M}_2\mathbf{M}_1^{\top}\right)\right)\right)
+\end{equation}
+with saturation rate $\alpha = 3$. The antisymmetric term $\mathbf{M}_1\mathbf{M}_2^\top - \mathbf{M}_2\mathbf{M}_1^\top$ followed by $\operatorname{ReLU}$ enforces directionality: at most one of $A_{ij}$, $A_{ji}$ is non-zero, so the model cannot assert that two companies predict each other symmetrically. We then retain the top $k = 10$ entries per row and row-normalise, which bounds in-degree and keeps the graph sparse.
+
+\paragraph{Mix-hop graph convolution.} Information is propagated over hop distances $0, \ldots, H$ with $H=2$ and combined by a learned linear mixing layer,
+\begin{equation}
+\mathbf{H}_{\text{out}} = \mathbf{W}\left[\mathbf{H} \,\|\, \mathbf{A}\mathbf{H} \,\|\, \mathbf{A}^{2}\mathbf{H}\right],
+\end{equation}
+so the layer can use a node's own state and its one- and two-hop neighbourhoods without being forced to mix them in fixed proportion.
+
+\paragraph{Dilated temporal convolution.} Each layer applies a gated causal 1-D convolution over the time axis, $\tanh(\Theta_1 \ast \mathbf{H}) \odot \sigma(\Theta_2 \ast \mathbf{H})$, with dilation $2^{\ell}$ at layer $\ell$. Inputs are left-padded only, so no future observation can influence a prediction. With three layers and kernel size 3 the receptive field covers the full 20-day window.
+
+Layers are stacked with residual connections and layer normalisation; a linear head maps the final time step to one prediction per node.
+
+\subsection{Baselines}
+
+Baselines serve two distinct purposes here. The first is to establish whether the graph helps relative to standard forecasters. The second, and in this setting more important, is to establish whether \emph{any} model is extracting signal at all, which requires references that contain no information by construction.
+
+\subsubsection{Naive references}
+
+\textbf{Zero forecast} predicts $\hat{y} = 0$ for every company on every day. Because daily log returns are approximately zero-mean, this attains a low MAE while containing no predictive information. It makes no directional call, so its directional accuracy is undefined rather than zero. \textbf{Persistence} predicts that tomorrow's return equals today's, the random-walk-with-momentum forecast. Any model that cannot beat these is not forecasting.
+
+\subsubsection{Non-graph baselines}
+
+\textbf{VAR} \parencite{sims1980macroeconomics} regresses the vector of returns on its own lags, $\mathbf{y}^{(t)} = \mathbf{c} + \sum_{\ell=1}^{p} \mathbf{\Phi}_\ell \mathbf{y}^{(t-\ell)} + \boldsymbol{\varepsilon}^{(t)}$, capturing linear cross-company dependencies through the dense coefficient matrices $\mathbf{\Phi}_\ell$ without an explicit graph. Lag order $p$ is selected by AIC on the training window. \textbf{LSTM} \parencite{hochreiter1997lstm} applies a two-layer recurrent network to each company's own feature history independently, capturing nonlinear temporal structure with no cross-company message passing. Contrasting these two isolates the two things a graph could add: nonlinearity (which LSTM has and VAR lacks) and structured cross-sectional interaction (which neither has).
+
+\subsubsection{Graph ablations}
+
+To attribute any difference to graph \emph{learning} rather than to the backbone, we run the identical MTGNN architecture with the adjacency replaced by a fixed matrix. The \textbf{identity graph} $\mathbf{A} = \mathbf{I}$ disables message passing entirely and isolates the temporal-convolution backbone. The \textbf{fixed correlation graph} is built from absolute Pearson correlations of training-period returns, sparsified to the same top-$k=10$ and row-normalised, giving the backbone a sensible but non-learned structure. Both use training data only.
+
+\subsubsection{Derivative-free graph search with CMA-ES}
+
+CMA-ES \parencite{hansen2001cmaes,hansen2016cma} is a population-based evolutionary strategy for black-box continuous optimization. It maintains a multivariate Gaussian search distribution $\mathcal{N}(\mathbf{m}, \sigma^2\mathbf{C})$, samples a population of candidates each generation, ranks them by fitness, and updates the mean towards the better candidates while adapting the covariance $\mathbf{C}$ to the local geometry of the objective. It requires no gradients, which makes it applicable when the objective is noisy or non-differentiable.
+
+A fair comparison must vary the optimizer and nothing else. We therefore give CMA-ES the \emph{same} node-embedding parameterization and the same decoding function that MTGNN uses, so a candidate solution is a flat vector holding $\mathbf{E}_1$ and $\mathbf{E}_2$, decoded into a sparse directed adjacency by the identical code path. We reduce the embedding dimension to $d = 4$, giving a search space of $2 \times 20 \times 4 = 160$ dimensions. This follows our proposal's observation that CMA-ES scales poorly with dimension; searching a dense $20\times 20$ matrix directly would require 400 dimensions with no benefit.
+
+The search protocol is: (i) pretrain an MTGNN backbone with the fixed correlation graph; (ii) freeze it and run CMA-ES, using validation MAE as fitness, for a fixed evaluation budget; (iii) retrain a backbone from scratch on the best graph found and evaluate once on the test set. Step (ii) holds the backbone fixed, so the search finds a graph suited to an already-trained forecaster rather than co-adapting the two. This is a genuine limitation relative to MTGNN, which optimizes graph and forecaster jointly, and we return to it in Section~\ref{sec:discussion}. The alternative, retraining the backbone inside every fitness evaluation, would multiply cost by three to four orders of magnitude and was not affordable.
+
+\subsection{Evaluation protocol}
+
+\paragraph{Splits and leakage control.} The panel is split \emph{chronologically} into 70\% training, 15\% validation and 15\% test; no shuffling is used, since shuffling would place future observations in the training set. Validation and test segments are extended backwards by $W + h$ days so the first prediction in each has a full history; this overlap only ever reuses past observations as model inputs and no target appears in more than one split. Feature standardisation statistics are computed on the training segment only. Targets are left in raw log-return units so MAE and RMSE remain interpretable. Model selection, early stopping and all hyperparameter choices use validation data exclusively; the test set is evaluated once per configuration.
+
+\paragraph{Metrics.} We report four.
+\begin{itemize}[nosep]
+    \item \textbf{MAE} $=\frac{1}{NT}\sum|y - \hat{y}|$, robust to the fat tails of return distributions.
+    \item \textbf{RMSE} $=\sqrt{\frac{1}{NT}\sum(y-\hat{y})^2}$, which penalises the large errors that matter most for risk.
+    \item \textbf{Directional accuracy}, the fraction of predictions with the correct sign. For a trading application the sign often matters more than the magnitude. Days with exactly zero return are excluded.
+    \item \textbf{Information coefficient (IC)}, the Pearson correlation between predicted and realised returns. This is the standard signal-quality measure in quantitative finance and, unlike MAE, it cannot be improved by shrinking predictions towards zero. We include it because MAE and RMSE are both minimised by near-zero forecasts on this target, which makes them unable to distinguish a cautious model from an informative one.
+\end{itemize}
+
+\paragraph{Repeated runs.} Every neural configuration is trained with three random seeds (42, 123, 456) and we report mean $\pm$ standard deviation. VAR and the naive references are deterministic, so they are run once. All models share one split, one normalizer and one evaluation path, implemented in a single shared training harness so that the comparison varies only the model.
+
+\paragraph{Implementation.} All models are implemented in PyTorch; MTGNN is implemented from scratch rather than taken from a reference repository. CMA-ES uses the \texttt{cma} package. Experiments run on CPU. The code, configuration and this report's tables are generated from one script so that reported numbers cannot drift from measured results.

@@ -1,0 +1,26 @@
+\section{Motivation}
+\label{sec:motivation}
+
+\subsection{Why a graph formulation}
+
+In a multivariate financial time series, the return of one company may contain information useful for forecasting the return of another. A semiconductor equipment supplier and the foundry that buys its machines share a revenue cycle; two fertiliser producers share input and commodity exposure. A model restricted to each company's own history cannot express these dependencies, whereas a graph makes them explicit and lets information propagate along edges.
+
+Formally, we treat the market as a directed graph $G = (V, E)$ with $|V| = N = 20$ company nodes. Each node $i$ carries a feature vector $\mathbf{x}_i^{(t)} \in \mathbb{R}^{3}$ at time $t$, holding its log return, rolling volatility and normalized trading volume. A directed edge $j \rightarrow i$ with weight $A_{ij}$ represents a learned \emph{predictive} relationship: information from $j$'s history is useful for forecasting $i$'s future return. The task is node-level regression: given a window of $W$ past observations for all nodes, predict the next-step return at every node simultaneously.
+
+We stress that the edges are predictive, not causal. A learned edge may reflect a genuine economic linkage, a shared exposure to an unmodelled common factor, or a spurious correlation in a finite sample. Our graph analysis is therefore descriptive.
+
+\subsection{Why the graph must be learned}
+
+The obvious alternative is to fix the graph from prior knowledge, for example by connecting companies in the same industry or by thresholding a correlation matrix. Both are unsatisfying. Industry membership is a crude proxy that assigns the same edge weight to a close supply-chain partner and a distant competitor. A correlation graph captures contemporaneous co-movement, which is not the same as a predictive lead-lag relationship, and it is symmetric where the underlying phenomenon is directional. Treating the adjacency matrix as a learned parameter avoids committing to either proxy in advance. Our ablations in Section~\ref{sec:results} test whether this flexibility is worth its cost.
+
+\subsection{Research gap}
+
+Existing graph structure learning methods are evaluated primarily on traffic and weather datasets, where signals are strong and relationships are close to stationary. Financial returns are a materially harder setting for three reasons:
+
+\begin{itemize}[nosep]
+    \item \textbf{Low signal-to-noise ratio.} Daily returns are dominated by unforecastable innovations; decades of work on return predictability report out-of-sample $R^2$ values near or below zero \parencite{welch2008comprehensive}, consistent with weak-form market efficiency \parencite{fama1970efficient}.
+    \item \textbf{Non-stationarity.} Relationships shift with regimes, so a single static learned graph may be misspecified across the evaluation period.
+    \item \textbf{Overfitting risk.} With many model and hyperparameter choices and a weak signal, apparent improvements are easily artefacts of repeated testing \parencite{harvey2016cross,lopezdeprado2014backtest}.
+\end{itemize}
+
+Separately, we are not aware of prior work comparing gradient-based graph learning against derivative-free search for discovering predictive relationships between assets. These two gaps, a dataset gap and a method gap, define the experiments that follow. The second gap is interesting precisely because the first makes it non-trivial: when gradients are computed on a noisy objective, the advantage of gradient-based optimization over a population-based search is not obvious a priori.

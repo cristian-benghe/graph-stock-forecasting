@@ -31,3 +31,17 @@ wandb/
 .idea/
 .vscode/
 *.swp
+
+# LaTeX build artifacts
+report/*.aux
+report/*.bbl
+report/*.bcf
+report/*.blg
+report/*.log
+report/*.out
+report/*.run.xml
+report/*.fls
+report/*.fdb_latexmk
+report/*.toc
+report/Main.pdf
+report/Text/*.aux

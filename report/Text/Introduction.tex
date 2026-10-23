@@ -1,0 +1,25 @@
+\section{Introduction}
+
+Multi-asset investment research rests on the observation that companies do not move in isolation. Supply chains, shared input costs, common macroeconomic exposures and overlapping investor bases all couple the returns of different firms. Because these couplings are relational rather than purely temporal, a graph is a natural representation: each company becomes a node, and an edge encodes the claim that one company's history carries information about another company's future.
+
+The difficulty is that the relevant graph is not given. Industry classifications are coarse, supply-chain disclosures are incomplete, and the strength of any relationship drifts as business models and macroeconomic regimes change. This motivates \emph{graph structure learning}, in which the adjacency matrix is treated as a parameter inferred from data rather than a fixed input. Two methods define the setting for this project. \textcite{shang2021gts} propose GTS, which learns a discrete graph jointly with a forecasting model. \textcite{wu2020mtgnn} propose MTGNN, which learns a directed adjacency matrix from trainable node embeddings and combines graph convolution with dilated temporal convolution.
+
+Both methods were developed and evaluated on traffic and weather benchmarks such as METR-LA and PEMS-BAY, where the underlying signal is strong, spatially smooth and close to stationary. Daily equity returns violate all three properties. This raises a question the original papers do not address: when the signal-to-noise ratio is as low as it is in financial returns, does learning the graph actually help, and is gradient-based learning the right tool for finding it?
+
+We study 20 publicly traded companies drawn from two deliberately distinct industries, semiconductors and agriculture, and formulate next-day return forecasting as node-level regression. Our central research question is:
+
+\begin{quote}
+\emph{Can a jointly learned graph improve multivariate stock-return forecasting compared with conventional time-series models and a derivative-free graph-search approach?}
+\end{quote}
+
+To answer it we compare MTGNN against non-graph baselines (VAR and LSTM), against ablations that replace the learned graph with a fixed correlation graph and with an identity matrix, and against CMA-ES \parencite{hansen2001cmaes}, an evolutionary strategy that searches the same graph parameterization without gradients. We also include two naive references, a zero forecast and a persistence forecast, because when the target is close to unpredictable a low error can be attained with no predictive information at all.
+
+Our contributions are as follows.
+
+\begin{itemize}[nosep]
+    \item We transfer graph structure learning from its usual low-noise benchmarks to financial returns under a leakage-controlled protocol, and report what happens.
+    \item We provide the comparison between gradient-based graph learning and derivative-free graph search that, to our knowledge, has not previously been made for this task, measuring both forecast accuracy and computational cost.
+    \item We show that the headline accuracy metrics on this task are dominated by the unpredictability of the target, so that naive references are required to interpret them. We regard this as the most transferable finding of the study, and it is the reason our conclusions are framed as a negative result rather than an improvement.
+\end{itemize}
+
+The remainder of the report motivates the graph formulation (Section~\ref{sec:motivation}), details the models, data and evaluation protocol (Section~\ref{sec:methodology}), presents results including ablations and graph analysis (Section~\ref{sec:results}), and discusses what the findings do and do not support (Sections~\ref{sec:discussion} and~\ref{sec:conclusion}).

@@ -1,0 +1,104 @@
+\documentclass[11pt,a4paper]{article}
+
+% -------------------------------------------------
+% Language
+% -------------------------------------------------
+\usepackage[english]{babel}
+\usepackage{subfiles}
+\usepackage{tikz}
+\usetikzlibrary{calc} 
+\usetikzlibrary{positioning}
+\usetikzlibrary{arrows.meta}
+\usepackage{enumitem}
+\usepackage{float}
+
+% -------------------------------------------------
+% Page layout
+% -------------------------------------------------
+\usepackage[
+    top=2.5cm,
+    bottom=2.5cm,
+    left=2.5cm,
+    right=2.5cm
+]{geometry}
+
+\usepackage{xcolor}
+\usepackage{tabularx}
+
+\definecolor{tublue}{HTML}{1F4E79}
+\definecolor{tuorange}{HTML}{C05C20}
+
+\newcommand{\hl}[1]{\textcolor{tuorange}{#1}}
+
+% -------------------------------------------------
+% Mathematics
+% -------------------------------------------------
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% -------------------------------------------------
+% Figures and tables
+% -------------------------------------------------
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+
+\usepackage{booktabs}
+
+% -------------------------------------------------
+% Links
+% -------------------------------------------------
+\usepackage[
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+]{hyperref}
+% -------------------------------------------------
+% Bibliography
+% -------------------------------------------------
+\usepackage[
+    backend=biber,
+    style=authoryear,
+    sorting=nyt
+]{biblatex}
+
+\addbibresource{references.bib}
+
+% -------------------------------------------------
+% Document information
+% -------------------------------------------------
+\title{GraphML_project_report}
+
+\author{
+    Group 21
+}
+
+\date{\today}
+
+% =================================================
+% Document
+% ==================================================
+\begin{document}
+
+\usetikzlibrary{calc}
+
+\input{TitlePage}
+
+
+% -------------------------------------------------
+% Main report
+% -------------------------------------------------
+\input{Text/Abstract}
+\input{Text/Introduction}
+\input{Text/Motivation}
+\input{Text/Methodology}
+\input{Text/Results}
+\input{Text/Discussion}
+\input{Text/Conclusion}
+
+
+\newpage
+\input{Text/AIStatement}
+\printbibliography
+
+\end{document}
