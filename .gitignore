@@ -45,3 +45,9 @@ report/*.fdb_latexmk
 report/*.toc
 report/Main.pdf
 report/Text/*.aux
+
+# Generated report assets (produced by scripts/make_report_tables.py)
+report/tables/
+report/figures/graph_*.png
+report/figures/metric_comparison.png
+report/figures/error_analysis.png

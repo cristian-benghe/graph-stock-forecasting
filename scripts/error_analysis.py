@@ -133,7 +133,7 @@ def main():
     print(f"Companies with directional accuracy > 0.50: {n_above_chance}/{len(tickers)}")
 
     # --- Figure ---
-    figdir = Path("outputs/figures"); figdir.mkdir(parents=True, exist_ok=True)
+    figdir = Path("report/figures"); figdir.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.4))
 
     x = np.arange(len(by_vol))
