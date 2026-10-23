@@ -1,82 +1,121 @@
-"""CMA-ES baseline: derivative-free search for graph adjacency weights.
+"""CMA-ES: derivative-free search over graph structure.
 
-Uses the CMA-ES evolutionary strategy to optimize the adjacency matrix
-that a frozen GNN backbone uses for message passing, instead of learning
-the graph end-to-end with gradients.
+To isolate the *optimizer* rather than the parameterization, CMA-ES searches the
+same node-embedding formulation MTGNN learns by gradient. A candidate is a flat
+vector holding two (num_nodes x node_dim) embedding matrices, decoded into a
+sparse directed adjacency with the identical function MTGNN uses.
+
+A small node_dim keeps the search space tractable: the proposal notes CMA-ES
+becomes expensive when too many graph parameters are optimized at once, and a
+full dense 20x20 matrix (400 dims) is far less sample-efficient than the
+embedding form (2*20*4 = 160 dims).
 """
 
-import numpy as np
+import time
+
 import cma
+import numpy as np
 import torch
-from torch.utils.data import DataLoader
+
+from src.models.mtgnn import sparsify_topk
 
 
-def adjacency_from_vector(vec: np.ndarray, num_nodes: int, top_k: int = 10) -> torch.Tensor:
-    """Reshape a flat vector into a sparse adjacency matrix."""
-    adj = torch.tensor(vec, dtype=torch.float32).reshape(num_nodes, num_nodes)
-    adj = torch.relu(adj)
-    adj.fill_diagonal_(0.0)
+def decode_adjacency(
+    vec: np.ndarray,
+    num_nodes: int,
+    node_dim: int,
+    top_k: int = 10,
+    alpha: float = 3.0,
+) -> torch.Tensor:
+    """Decode a flat CMA-ES vector into a sparse directed adjacency matrix."""
+    split = num_nodes * node_dim
+    s = torch.tensor(vec[:split], dtype=torch.float32).reshape(num_nodes, node_dim)
+    t = torch.tensor(vec[split:], dtype=torch.float32).reshape(num_nodes, node_dim)
+    s, t = torch.tanh(alpha * s), torch.tanh(alpha * t)
+    adj = torch.relu(torch.tanh(alpha * (s @ t.T - t @ s.T)))
+    return sparsify_topk(adj, top_k)
 
-    if top_k < num_nodes:
-        topk_vals, topk_idx = torch.topk(adj, top_k, dim=1)
-        mask = torch.zeros_like(adj)
-        mask.scatter_(1, topk_idx, 1.0)
-        adj = adj * mask
 
-    row_sum = adj.sum(dim=1, keepdim=True) + 1e-8
-    return adj / row_sum
+def search_dimension(num_nodes: int, node_dim: int) -> int:
+    return 2 * num_nodes * node_dim
 
 
-def evaluate_adjacency(
-    adj: torch.Tensor,
-    model: torch.nn.Module,
-    dataloader: DataLoader,
-    device: torch.device,
-) -> float:
-    """Evaluate a fixed adjacency matrix with the given model. Returns val MSE."""
+@torch.no_grad()
+def _val_mae(model, adj, loader, device) -> float:
     model.eval()
-    total_loss = 0.0
-    count = 0
-
-    with torch.no_grad():
-        for x, y in dataloader:
-            x, y = x.to(device), y.to(device)
-            # Override the model's learned graph with the CMA-ES candidate
-            preds = model.forward_with_graph(x, adj.to(device))
-            total_loss += ((preds - y) ** 2).sum().item()
-            count += y.numel()
-
-    return total_loss / count
+    total, n = 0.0, 0
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        out = model(x, adj=adj.to(device))
+        total += (out - y).abs().sum().item()
+        n += y.numel()
+    return total / n
 
 
 def run_cmaes_search(
-    model: torch.nn.Module,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
+    model,
+    val_loader,
     num_nodes: int,
+    node_dim: int = 4,
     top_k: int = 10,
     sigma0: float = 0.5,
-    max_iterations: int = 500,
-    device: torch.device = torch.device("cpu"),
-) -> tuple[torch.Tensor, float]:
-    """Search for the best adjacency matrix using CMA-ES.
+    max_evaluations: int = 2000,
+    population_size: int = 12,
+    seed: int = 42,
+    device=torch.device("cpu"),
+    verbose: bool = True,
+) -> dict:
+    """Search graph embeddings with CMA-ES against a frozen backbone.
 
-    Returns (best_adjacency, best_val_loss).
+    The backbone is held fixed during the search, so this measures how well
+    CMA-ES can find a graph for an already-trained forecaster. Returns the best
+    adjacency, its validation MAE, and the wall-clock and evaluation cost (the
+    proposal asks for a computational-cost comparison, not just accuracy).
     """
-    dim = num_nodes * num_nodes
+    dim = search_dimension(num_nodes, node_dim)
+    for p in model.parameters():
+        p.requires_grad_(False)
 
-    def objective(vec):
-        adj = adjacency_from_vector(vec, num_nodes, top_k)
-        return evaluate_adjacency(adj, model, val_loader, device)
+    es = cma.CMAEvolutionStrategy(
+        np.zeros(dim),
+        sigma0,
+        {
+            "popsize": population_size,
+            "maxfevals": max_evaluations,
+            "seed": seed,
+            "verbose": -9,
+        },
+    )
 
-    es = cma.CMAEvolutionStrategy(np.zeros(dim), sigma0, {
-        "maxiter": max_iterations,
-        "popsize": 20,
-        "verb_disp": 50,
-    })
+    start = time.time()
+    evaluations = 0
+    history = []
 
-    es.optimize(objective)
-    best_vec = es.result.xbest
-    best_adj = adjacency_from_vector(best_vec, num_nodes, top_k)
+    while not es.stop():
+        candidates = es.ask()
+        fitness = []
+        for c in candidates:
+            adj = decode_adjacency(c, num_nodes, node_dim, top_k)
+            fitness.append(_val_mae(model, adj, val_loader, device))
+            evaluations += 1
+        es.tell(candidates, fitness)
+        history.append(float(min(fitness)))
+        if verbose and len(history) % 20 == 0:
+            print(f"    gen {len(history):4d} | evals {evaluations:5d} | "
+                  f"best val MAE {es.result.fbest:.6f}")
 
-    return best_adj, es.result.fbest
+    elapsed = time.time() - start
+    best_adj = decode_adjacency(es.result.xbest, num_nodes, node_dim, top_k)
+
+    for p in model.parameters():
+        p.requires_grad_(True)
+
+    return {
+        "adjacency": best_adj,
+        "best_val_mae": float(es.result.fbest),
+        "evaluations": evaluations,
+        "generations": len(history),
+        "seconds": elapsed,
+        "history": history,
+        "search_dim": dim,
+    }
