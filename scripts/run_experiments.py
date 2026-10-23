@@ -20,7 +20,11 @@ from torch.utils.data import DataLoader
 
 from src.baselines.cmaes_search import run_cmaes_search, decode_adjacency
 from src.baselines.correlation_graph import correlation_adjacency, identity_adjacency
-from src.baselines.naive import persistence_forecast, zero_forecast
+from src.baselines.naive import (
+    persistence_forecast,
+    train_mean_forecast,
+    zero_forecast,
+)
 from src.baselines.var import VARForecaster
 from src.data.dataset import chronological_split, segment_offset
 from src.evaluation.metrics import aggregate_seeds, evaluate_all
@@ -164,6 +168,7 @@ def run_var(data, cfg):
 
 def run_naive(data, cfg):
     T = len(data)
+    train_end = int(T * cfg["split"]["train_ratio"])
     val_end = int(T * (cfg["split"]["train_ratio"] + cfg["split"]["val_ratio"]))
     w, h = cfg["features"]["window_size"], cfg["features"]["horizon"]
     returns = data[:, :, 0]
@@ -173,9 +178,14 @@ def run_naive(data, cfg):
         test_seg[i + w + h - 1] for i in range(len(test_seg) - w - h + 1)
     ])
 
+    # TrainMean is the constant per-company drift forecast. It is included
+    # because AIC selects zero lags for VAR, which reduces VAR to exactly this
+    # predictor; comparing the two shows whether VAR's apparent directional
+    # skill is conditional forecasting or simply the equity drift.
     forecasts = {
         "Zero": zero_forecast(y_true),
         "Persistence": persistence_forecast(test_seg, w, h),
+        "TrainMean": train_mean_forecast(returns[:train_end], len(y_true)),
     }
     out = {}
     for k, yp in forecasts.items():

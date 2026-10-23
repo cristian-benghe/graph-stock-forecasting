@@ -18,6 +18,7 @@ import numpy as np
 ROW_ORDER = [
     ("Zero", "Zero forecast"),
     ("Persistence", "Persistence"),
+    ("TrainMean", "Train-mean drift"),
     ("VAR", "VAR"),
     ("LSTM", "LSTM"),
     ("MTGNN-Identity", "MTGNN (identity graph)"),
