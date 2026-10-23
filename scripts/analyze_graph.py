@@ -101,7 +101,7 @@ def main():
     with open("configs/default.yaml") as f:
         cfg = yaml.safe_load(f)
     sectors = sector_map(cfg)
-    figdir = Path("outputs/figures")
+    figdir = Path("report/figures")
     figdir.mkdir(parents=True, exist_ok=True)
 
     graphs = {

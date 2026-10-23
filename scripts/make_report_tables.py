@@ -45,9 +45,11 @@ def main():
     results = payload["results"]
     seeds = payload["seeds"]
 
-    tabdir = Path("outputs/tables")
+    # Written straight into the report tree so the report never contains
+    # hand-copied numbers that can drift from the measured results.
+    tabdir = Path("report/tables")
     tabdir.mkdir(parents=True, exist_ok=True)
-    figdir = Path("outputs/figures")
+    figdir = Path("report/figures")
     figdir.mkdir(parents=True, exist_ok=True)
 
     # --- Main results table ---
