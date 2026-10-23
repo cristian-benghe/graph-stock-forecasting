@@ -19,7 +19,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from src.data.dataset import chronological_split
+from src.data.dataset import chronological_split, segment_offset
 from src.evaluation.metrics import directional_accuracy, mae
 from src.models.mtgnn import MTGNN
 from src.training.trainer import predict, set_seed, train_model
@@ -66,7 +66,7 @@ def main():
     T = len(data)
     val_end = int(T * (cfg["split"]["train_ratio"] + cfg["split"]["val_ratio"]))
     w, h = cfg["features"]["window_size"], cfg["features"]["horizon"]
-    offset = max(0, val_end - w - h)
+    offset = segment_offset(val_end, w, h)
     seg_vol = data[offset:, :, 1]
     seg_dates = dates[offset:]
     idxs = [i + w + h - 1 for i in range(len(seg_vol) - w - h + 1)]
