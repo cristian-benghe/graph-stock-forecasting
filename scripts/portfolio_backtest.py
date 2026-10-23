@@ -53,6 +53,18 @@ def max_drawdown(cumulative: np.ndarray) -> float:
     return float(np.min(cumulative - peak))
 
 
+def is_degenerate(y_pred) -> bool:
+    """True when the forecast carries no cross-sectional ranking information.
+
+    If predictions are identical across companies on a given day, the long-short
+    ranking is decided entirely by argsort tie-breaking, i.e. by the order
+    companies happen to appear in the data file. The resulting basket is a fixed
+    arbitrary bet rather than a strategy, so its Sharpe ratio says nothing about
+    the forecast and must not be read as performance.
+    """
+    return bool(np.allclose(y_pred.std(axis=1), 0.0))
+
+
 def evaluate_strategy(y_true, y_pred, label):
     gross, weights = long_short_returns(y_true, y_pred, cost_bps=0.0)
     net, _ = long_short_returns(y_true, y_pred, cost_bps=COST_PER_SIDE_BPS)
@@ -71,6 +83,8 @@ def evaluate_strategy(y_true, y_pred, label):
         "hit_rate": float((gross > 0).mean()),
         "avg_daily_turnover": avg_turnover,
         "n_days": int(len(gross)),
+        "degenerate_ranking": is_degenerate(y_pred),
+        "constant_basket": bool(np.allclose(weights, weights[0])),
     }
     return out, net
 
@@ -87,21 +101,28 @@ def main():
     print(f"Long-short top-{TOP_K}/bottom-{TOP_K}, dollar-neutral, "
           f"daily rebalance, {COST_PER_SIDE_BPS:.0f} bps per side\n")
     print(f"{'Model':20s} {'Sharpe(gross)':>14s} {'Sharpe(net)':>12s} "
-          f"{'CumRet(net)':>12s} {'MaxDD':>9s} {'Turnover':>9s}")
+          f"{'CumRet(net)':>12s} {'MaxDD':>9s} {'Turnover':>9s}  note")
 
     rows, curves = [], {}
     for n in names:
         y_true, y_pred = pooled(models, n)
-        if np.allclose(y_pred, y_pred[0]):
-            # A constant forecast produces a fixed basket: the ranking never
-            # changes, so this is a static bet, not a strategy. Still reported.
-            pass
         row, net = evaluate_strategy(y_true, y_pred, n)
         rows.append(row)
         curves[n] = np.cumsum(net)
+        note = ""
+        if row["degenerate_ranking"]:
+            note = "DEGENERATE: ranking is argsort tie-break, not a forecast"
+        elif row["constant_basket"]:
+            note = "constant basket (static bet)"
         print(f"{n:20s} {row['gross_sharpe']:>14.3f} {row['net_sharpe']:>12.3f} "
               f"{row['net_cumulative_return']:>12.4f} {row['max_drawdown_net']:>9.4f} "
-              f"{row['avg_daily_turnover']:>9.3f}")
+              f"{row['avg_daily_turnover']:>9.3f}  {note}")
+
+    degenerate = [r["model"] for r in rows if r["degenerate_ranking"]]
+    if degenerate:
+        print(f"\nWARNING: {degenerate} produce identical predictions across "
+              "companies, so their Sharpe ratios reflect an arbitrary fixed basket "
+              "chosen by data-file ordering. Do not interpret them as skill.")
 
     figdir = Path("report/figures")
     figdir.mkdir(parents=True, exist_ok=True)
