@@ -22,7 +22,7 @@ from src.baselines.cmaes_search import run_cmaes_search, decode_adjacency
 from src.baselines.correlation_graph import correlation_adjacency, identity_adjacency
 from src.baselines.naive import persistence_forecast, zero_forecast
 from src.baselines.var import VARForecaster
-from src.data.dataset import chronological_split
+from src.data.dataset import chronological_split, segment_offset
 from src.evaluation.metrics import aggregate_seeds, evaluate_all
 from src.models.lstm import LSTMForecaster
 from src.models.mtgnn import MTGNN
@@ -135,7 +135,7 @@ def run_var(data, cfg):
     h = cfg["features"]["horizon"]
 
     returns = data[:, :, 0]
-    test_seg = returns[max(0, val_end - w - h):]
+    test_seg = returns[segment_offset(val_end, w, h):]
 
     t0 = time.time()
     var = VARForecaster(max_lags=5).fit(returns[:train_end])
@@ -159,7 +159,7 @@ def run_naive(data, cfg):
     val_end = int(T * (cfg["split"]["train_ratio"] + cfg["split"]["val_ratio"]))
     w, h = cfg["features"]["window_size"], cfg["features"]["horizon"]
     returns = data[:, :, 0]
-    test_seg = returns[max(0, val_end - w - h):]
+    test_seg = returns[segment_offset(val_end, w, h):]
 
     y_true = np.asarray([
         test_seg[i + w + h - 1] for i in range(len(test_seg) - w - h + 1)

@@ -60,6 +60,19 @@ class StockGraphDataset(Dataset):
         return torch.from_numpy(x), torch.from_numpy(y)
 
 
+def segment_offset(boundary: int, window_size: int, horizon: int) -> int:
+    """Row at which a segment must start so its first target is `boundary`.
+
+    A sample beginning at local index 0 predicts local row
+    `window_size + horizon - 1`, so the segment has to start that many rows
+    before the boundary, plus one. Omitting the +1 makes the first target of a
+    segment equal the last target of the previous one, duplicating a labelled
+    day across two splits. Every model must use this same helper, otherwise the
+    neural models and the statistical baselines are scored on different samples.
+    """
+    return max(0, boundary - window_size - horizon + 1)
+
+
 def chronological_split(
     data: np.ndarray,
     train_ratio: float = 0.7,
@@ -70,9 +83,9 @@ def chronological_split(
 ):
     """Split chronologically, fit the normalizer on train only.
 
-    Val and test segments are extended backwards by `window_size` so the first
-    prediction in each segment has a full history. The overlap only ever reuses
-    past observations as inputs, so no target is seen more than once.
+    Val and test segments are extended backwards so the first prediction in each
+    has a full history. The overlap only ever reuses past observations as model
+    inputs; no target appears in more than one split (see tests/test_no_leakage.py).
     """
     T = len(data)
     train_end = int(T * train_ratio)
@@ -82,8 +95,8 @@ def chronological_split(
 
     segments = {
         "train": data[:train_end],
-        "val": data[max(0, train_end - window_size - horizon) : val_end],
-        "test": data[max(0, val_end - window_size - horizon) :],
+        "val": data[segment_offset(train_end, window_size, horizon) : val_end],
+        "test": data[segment_offset(val_end, window_size, horizon) :],
     }
 
     datasets = {}
