@@ -94,6 +94,13 @@ def run_mtgnn(data, cfg, seed, device, adj=None, label="MTGNN"):
     return metrics, out["model"], (y_true, y_pred)
 
 
+def _store(preds_store, name, seed, y_true, y_pred):
+    """Record test predictions so significance tests and the portfolio
+    evaluation can run afterwards without retraining anything."""
+    preds_store[f"{name}|seed{seed}|true"] = np.asarray(y_true, dtype=np.float32)
+    preds_store[f"{name}|seed{seed}|pred"] = np.asarray(y_pred, dtype=np.float32)
+
+
 def run_lstm(data, cfg, seed, device):
     set_seed(seed)
     l = cfg["lstm"]
@@ -123,7 +130,7 @@ def run_lstm(data, cfg, seed, device):
     metrics["best_epoch"] = out["best_epoch"]
     print(f"  [LSTM seed {seed}] test MAE {metrics['mae']:.6f} "
           f"DA {metrics['directional_accuracy']:.4f} IC {metrics['information_coefficient']:+.4f}")
-    return metrics
+    return metrics, (y_true, y_pred)
 
 
 def run_var(data, cfg):
@@ -148,10 +155,11 @@ def run_var(data, cfg):
     metrics = evaluate_all(y_true, y_pred)
     metrics["train_seconds"] = elapsed
     metrics["lag_order"] = var.lag_order
+    metrics["selected_lags"] = var.selected_lags
     print(f"  [VAR] test MAE {metrics['mae']:.6f} "
           f"DA {metrics['directional_accuracy']:.4f} IC {metrics['information_coefficient']:+.4f} "
-          f"(lags={var.lag_order})")
-    return metrics
+          f"(AIC-selected lags={var.selected_lags})")
+    return metrics, (y_true, y_pred)
 
 
 def run_naive(data, cfg):
@@ -165,13 +173,18 @@ def run_naive(data, cfg):
         test_seg[i + w + h - 1] for i in range(len(test_seg) - w - h + 1)
     ])
 
+    forecasts = {
+        "Zero": zero_forecast(y_true),
+        "Persistence": persistence_forecast(test_seg, w, h),
+    }
     out = {}
-    out["Zero"] = evaluate_all(y_true, zero_forecast(y_true))
-    out["Persistence"] = evaluate_all(y_true, persistence_forecast(test_seg, w, h))
-    for k, v in out.items():
-        print(f"  [{k}] test MAE {v['mae']:.6f} "
-              f"DA {v['directional_accuracy']:.4f} IC {v['information_coefficient']:+.4f}")
-    return out
+    for k, yp in forecasts.items():
+        out[k] = evaluate_all(y_true, yp)
+        da = out[k]["directional_accuracy"]
+        da_s = "  n/a " if np.isnan(da) else f"{da:.4f}"
+        print(f"  [{k}] test MAE {out[k]['mae']:.6f} "
+              f"DA {da_s} IC {out[k]['information_coefficient']:+.4f}")
+    return out, y_true, forecasts
 
 
 def run_cmaes(data, cfg, seed, device):
@@ -193,12 +206,14 @@ def run_cmaes(data, cfg, seed, device):
         node_dim=m["node_dim"], temporal_kernel=m["temporal_kernel"],
         top_k=m["top_k"], dropout=m["dropout"],
     )
+    _t0 = time.time()
     pre = train_model(
         backbone, train_loader, val_loader,
         epochs=c["pretrain_epochs"], learning_rate=m["learning_rate"],
         weight_decay=m["weight_decay"], adj=corr_adj.to(device),
         device=device, verbose=False,
     )
+    pre_seconds = time.time() - _t0
 
     print("    searching graph with CMA-ES")
     search = run_cmaes_search(
@@ -219,8 +234,9 @@ def run_cmaes(data, cfg, seed, device):
     metrics["search_seconds"] = search["seconds"]
     metrics["search_evaluations"] = search["evaluations"]
     metrics["search_dim"] = search["search_dim"]
-    metrics["total_seconds"] = metrics["train_seconds"] + search["seconds"]
-    return metrics, search
+    metrics["pretrain_seconds"] = pre_seconds
+    metrics["total_seconds"] = metrics["train_seconds"] + search["seconds"] + pre_seconds
+    return metrics, search, preds
 
 
 def main():
@@ -248,56 +264,72 @@ def main():
 
     print(f"Device: {device} | data {data.shape} | seeds {seeds}\n")
 
-    results, extras = {}, {}
+    results, extras, preds_store = {}, {}, {}
     T = len(data)
     train_end = int(T * cfg["split"]["train_ratio"])
+    Path("outputs").mkdir(exist_ok=True)
 
     if run_this("naive"):
         print("=== Naive baselines ===")
-        for k, v in run_naive(data, cfg).items():
+        naive_metrics, naive_true, naive_forecasts = run_naive(data, cfg)
+        for k, v in naive_metrics.items():
             results[k] = {"seeds": [v], "aggregate": aggregate_seeds([v])}
+            _store(preds_store, k, 0, naive_true, naive_forecasts[k])
 
     if run_this("var"):
         print("\n=== VAR ===")
-        v = run_var(data, cfg)
+        v, vp = run_var(data, cfg)
         results["VAR"] = {"seeds": [v], "aggregate": aggregate_seeds([v])}
+        _store(preds_store, "VAR", 0, *vp)
 
     if run_this("lstm"):
         print("\n=== LSTM ===")
-        runs = [run_lstm(data, cfg, s, device) for s in seeds]
+        runs = []
+        for s in seeds:
+            mt, p = run_lstm(data, cfg, s, device)
+            runs.append(mt)
+            _store(preds_store, "LSTM", s, *p)
         results["LSTM"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
 
     if run_this("mtgnn"):
         print("\n=== MTGNN (learned graph) ===")
         runs = []
         for s in seeds:
-            mt, model, _ = run_mtgnn(data, cfg, s, device)
+            mt, model, p = run_mtgnn(data, cfg, s, device)
             runs.append(mt)
+            _store(preds_store, "MTGNN", s, *p)
             if s == seeds[0]:
-                adj = model.get_learned_graph()
-                Path("outputs").mkdir(exist_ok=True)
-                torch.save({"adjacency": adj, "tickers": tickers},
+                torch.save({"adjacency": model.get_learned_graph(), "tickers": tickers},
                            "outputs/learned_graph.pt")
         results["MTGNN"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
 
     if run_this("ablation"):
         print("\n=== Ablation: fixed correlation graph ===")
         corr = correlation_adjacency(data[:train_end, :, 0], top_k=cfg["mtgnn"]["top_k"])
-        runs = [run_mtgnn(data, cfg, s, device, adj=corr, label="Corr-graph")[0] for s in seeds]
+        runs = []
+        for s in seeds:
+            mt, _, p = run_mtgnn(data, cfg, s, device, adj=corr, label="Corr-graph")
+            runs.append(mt)
+            _store(preds_store, "MTGNN-CorrGraph", s, *p)
         results["MTGNN-CorrGraph"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
         torch.save({"adjacency": corr, "tickers": tickers}, "outputs/correlation_graph.pt")
 
         print("\n=== Ablation: identity graph (no message passing) ===")
         eye = identity_adjacency(data.shape[1])
-        runs = [run_mtgnn(data, cfg, s, device, adj=eye, label="Identity")[0] for s in seeds]
+        runs = []
+        for s in seeds:
+            mt, _, p = run_mtgnn(data, cfg, s, device, adj=eye, label="Identity")
+            runs.append(mt)
+            _store(preds_store, "MTGNN-Identity", s, *p)
         results["MTGNN-Identity"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
 
     if run_this("cmaes"):
         print("\n=== CMA-ES graph search ===")
         runs, searches = [], []
         for s in seeds:
-            mt, search = run_cmaes(data, cfg, s, device)
+            mt, search, p = run_cmaes(data, cfg, s, device)
             runs.append(mt)
+            _store(preds_store, "CMA-ES", s, *p)
             searches.append({k: search[k] for k in
                              ["best_val_mae", "evaluations", "generations", "seconds", "search_dim"]})
             if s == seeds[0]:
@@ -305,6 +337,10 @@ def main():
                            "outputs/cmaes_graph.pt")
         results["CMA-ES"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
         extras["cmaes_search"] = searches
+
+    if preds_store:
+        np.savez_compressed("outputs/predictions.npz", **preds_store)
+        print(f"\nSaved {len(preds_store)//2} prediction sets to outputs/predictions.npz")
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
