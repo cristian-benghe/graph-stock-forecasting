@@ -60,9 +60,14 @@ lstm:
   batch_size: 32
 
 cmaes:
+  # CMA-ES searches the same node-embedding graph parameterization MTGNN learns
+  # by gradient, so the comparison isolates the optimizer. node_dim is kept small
+  # because evolutionary search scales poorly with dimension.
+  node_dim: 4
   sigma0: 0.5
-  max_iterations: 500
-  population_size: 20
+  max_evaluations: 2000
+  population_size: 12
+  pretrain_epochs: 40
 
 evaluation:
   metrics:

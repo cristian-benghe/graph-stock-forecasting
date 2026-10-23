@@ -1,7 +1,11 @@
 """MTGNN: Connecting the Dots (Wu et al., 2020).
 
-Learns a directed adjacency matrix from trainable node embeddings,
-then applies graph convolution + temporal convolution for forecasting.
+Learns a directed adjacency matrix from trainable node embeddings, then applies
+mix-hop graph convolution and dilated temporal convolution for forecasting.
+
+`forward` accepts an optional external adjacency so the same backbone can be
+driven by a learned graph (MTGNN), a fixed correlation graph (ablation), or a
+CMA-ES candidate, keeping the comparison to a single varying factor.
 """
 
 import torch
@@ -9,34 +13,45 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class GraphLearner(nn.Module):
-    """Learn a sparse directed adjacency matrix from node embeddings."""
+def sparsify_topk(adj: torch.Tensor, top_k: int) -> torch.Tensor:
+    """Keep the top-k entries per row, then row-normalize to sum to 1."""
+    if 0 < top_k < adj.size(0):
+        topk_idx = torch.topk(adj, top_k, dim=1).indices
+        mask = torch.zeros_like(adj)
+        mask.scatter_(1, topk_idx, 1.0)
+        adj = adj * mask
+    return adj / (adj.sum(dim=1, keepdim=True) + 1e-8)
 
-    def __init__(self, num_nodes: int, node_dim: int, top_k: int = 10):
+
+class GraphLearner(nn.Module):
+    """Learn a sparse directed adjacency matrix from node embeddings.
+
+    Uses the asymmetric formulation from the MTGNN paper: subtracting the
+    transpose makes the relation directed, so an edge j->i does not imply i->j.
+    """
+
+    def __init__(self, num_nodes: int, node_dim: int, top_k: int = 10, alpha: float = 3.0):
         super().__init__()
         self.emb_s = nn.Embedding(num_nodes, node_dim)
         self.emb_t = nn.Embedding(num_nodes, node_dim)
+        self.lin_s = nn.Linear(node_dim, node_dim)
+        self.lin_t = nn.Linear(node_dim, node_dim)
         self.top_k = top_k
+        self.alpha = alpha
 
     def forward(self) -> torch.Tensor:
-        s = torch.tanh(self.emb_s.weight)
-        t = torch.tanh(self.emb_t.weight)
-        adj = F.relu(s @ t.T)
-
-        # Sparsify: keep only top-k per row
-        if self.top_k < adj.size(0):
-            topk_vals, topk_idx = torch.topk(adj, self.top_k, dim=1)
-            mask = torch.zeros_like(adj)
-            mask.scatter_(1, topk_idx, 1.0)
-            adj = adj * mask
-
-        # Row-normalize
-        row_sum = adj.sum(dim=1, keepdim=True) + 1e-8
-        return adj / row_sum
+        s = torch.tanh(self.alpha * self.lin_s(self.emb_s.weight))
+        t = torch.tanh(self.alpha * self.lin_t(self.emb_t.weight))
+        # Asymmetric: s@t.T - t@s.T is antisymmetric, so relu keeps one direction
+        adj = F.relu(torch.tanh(self.alpha * (s @ t.T - t @ s.T)))
+        return sparsify_topk(adj, self.top_k)
 
 
 class MixHopGraphConv(nn.Module):
-    """Mix-hop graph convolution: aggregate at multiple hop distances."""
+    """Mix-hop graph convolution over a (batch, nodes, time, channels) tensor.
+
+    Aggregates at hop distances 0..num_hops and mixes them with a linear layer.
+    """
 
     def __init__(self, in_channels: int, out_channels: int, num_hops: int = 2):
         super().__init__()
@@ -44,66 +59,54 @@ class MixHopGraphConv(nn.Module):
         self.linear = nn.Linear(in_channels * (num_hops + 1), out_channels)
 
     def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
-        # x: (batch, num_nodes, channels)
         outputs = [x]
         h = x
         for _ in range(self.num_hops):
-            h = torch.einsum("ij,bjc->bic", adj, h)
+            # Propagate across nodes at every time step at once
+            h = torch.einsum("ij,bjtc->bitc", adj, h)
             outputs.append(h)
         return self.linear(torch.cat(outputs, dim=-1))
 
 
 class DilatedTemporalConv(nn.Module):
-    """Dilated causal temporal convolution."""
+    """Dilated causal temporal convolution with a gated activation."""
 
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, dilation: int = 1):
+    def __init__(self, channels: int, kernel_size: int = 3, dilation: int = 1):
         super().__init__()
-        self.padding = (kernel_size - 1) * dilation
-        self.conv = nn.Conv1d(
-            in_channels, out_channels,
-            kernel_size=kernel_size,
-            dilation=dilation,
-            padding=self.padding,
-        )
-        self.bn = nn.BatchNorm1d(out_channels)
+        self.pad = (kernel_size - 1) * dilation
+        self.filt = nn.Conv1d(channels, channels, kernel_size, dilation=dilation)
+        self.gate = nn.Conv1d(channels, channels, kernel_size, dilation=dilation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (batch, channels, time)
-        out = self.conv(x)
-        out = out[..., :x.size(-1)]  # causal: trim future
-        return F.relu(self.bn(out))
+        # x: (batch, channels, time). Left-pad only, so no future leakage.
+        x = F.pad(x, (self.pad, 0))
+        return torch.tanh(self.filt(x)) * torch.sigmoid(self.gate(x))
 
 
 class MTGNNLayer(nn.Module):
-    """Single MTGNN layer: temporal conv -> graph conv -> residual."""
+    """Temporal conv -> graph conv -> residual, with layer norm."""
 
     def __init__(self, channels: int, kernel_size: int, dilation: int, num_hops: int = 2):
         super().__init__()
-        self.temporal = DilatedTemporalConv(channels, channels, kernel_size, dilation)
+        self.temporal = DilatedTemporalConv(channels, kernel_size, dilation)
         self.graph = MixHopGraphConv(channels, channels, num_hops)
         self.norm = nn.LayerNorm(channels)
 
     def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
-        # x: (batch, num_nodes, time, channels)
+        # x: (batch, nodes, time, channels)
         B, N, T, C = x.shape
         residual = x
 
-        # Temporal conv: reshape to (B*N, C, T)
-        h = x.reshape(B * N, T, C).permute(0, 2, 1)
+        h = x.reshape(B * N, T, C).transpose(1, 2)
         h = self.temporal(h)
-        h = h.permute(0, 2, 1).reshape(B, N, T, C)
+        h = h.transpose(1, 2).reshape(B, N, T, C)
 
-        # Graph conv at each time step
-        out = []
-        for t in range(T):
-            out.append(self.graph(h[:, :, t, :], adj))
-        h = torch.stack(out, dim=2)
-
+        h = self.graph(h, adj)
         return self.norm(h + residual)
 
 
 class MTGNN(nn.Module):
-    """Full MTGNN model for multivariate time-series forecasting."""
+    """MTGNN for multivariate time-series forecasting."""
 
     def __init__(
         self,
@@ -115,41 +118,43 @@ class MTGNN(nn.Module):
         temporal_kernel: int = 3,
         top_k: int = 10,
         dropout: float = 0.3,
+        num_hops: int = 2,
     ):
         super().__init__()
+        self.num_nodes = num_nodes
         self.graph_learner = GraphLearner(num_nodes, node_dim, top_k)
         self.input_proj = nn.Linear(in_features, hidden_channels)
-
-        self.layers = nn.ModuleList()
-        for i in range(num_layers):
-            dilation = 2 ** i
-            self.layers.append(MTGNNLayer(hidden_channels, temporal_kernel, dilation))
-
+        self.layers = nn.ModuleList([
+            MTGNNLayer(hidden_channels, temporal_kernel, 2 ** i, num_hops)
+            for i in range(num_layers)
+        ])
         self.dropout = nn.Dropout(dropout)
         self.output_proj = nn.Linear(hidden_channels, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, adj: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
-            x: (batch, window_size, num_nodes, in_features)
+            x: (batch, window, nodes, features)
+            adj: optional (nodes, nodes) adjacency. If None, uses the learned graph.
         Returns:
-            predictions: (batch, num_nodes) - predicted next-day returns
+            (batch, nodes) predicted next-step returns
         """
-        B, T, N, F = x.shape
-        adj = self.graph_learner()
+        if adj is None:
+            adj = self.graph_learner()
 
-        # Project input features
-        h = self.input_proj(x)  # (B, T, N, C)
-        h = h.permute(0, 2, 1, 3)  # (B, N, T, C)
+        h = self.input_proj(x)          # (B, T, N, C)
+        h = h.permute(0, 2, 1, 3)       # (B, N, T, C)
 
         for layer in self.layers:
             h = self.dropout(layer(h, adj))
 
-        # Use last time step for prediction
-        h = h[:, :, -1, :]  # (B, N, C)
-        return self.output_proj(h).squeeze(-1)  # (B, N)
+        h = h[:, :, -1, :]              # last time step
+        return self.output_proj(h).squeeze(-1)
 
+    def forward_with_graph(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+        """Explicit alias used by the CMA-ES search and the ablation."""
+        return self.forward(x, adj=adj)
+
+    @torch.no_grad()
     def get_learned_graph(self) -> torch.Tensor:
-        """Return the current learned adjacency matrix."""
-        with torch.no_grad():
-            return self.graph_learner().cpu()
+        return self.graph_learner().detach().cpu()
