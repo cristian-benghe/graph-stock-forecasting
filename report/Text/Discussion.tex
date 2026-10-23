@@ -1,3 +1,86 @@
 \section{Discussion}
 \label{sec:discussion}
-Placeholder.
+
+The results are negative: no model forecasts next-day returns better than a constant. This section explains \emph{why} each number moves in the direction it does, because the mechanisms are more informative than the ranking. We work from the most specific explanation to the most general.
+
+\subsection{Why lower MAE indicates less information, not more}
+
+The single most important feature of Table~\ref{tab:main} is that its ordering is almost the reverse of what a reader would assume. Understanding this requires looking at what the training objective actually rewards.
+
+We train on mean squared error. For any input $\mathbf{x}$, the MSE-minimising prediction is the conditional expectation $\mathbb{E}[y \mid \mathbf{x}]$. If returns were strongly predictable this conditional mean would vary substantially with $\mathbf{x}$ and the model would learn a wide-ranging function. But daily equity returns are close to a martingale difference sequence: $\mathbb{E}[y \mid \mathbf{x}] \approx \mathbb{E}[y] \approx 0$ for essentially all $\mathbf{x}$. The loss-minimising function is therefore \emph{almost the constant zero}, and gradient descent finds it.
+
+Table~\ref{tab:shrink} confirms this is exactly what happened. Every trained model collapsed its prediction dispersion to between $4.8\%$ and $18.3\%$ of the target's standard deviation. MTGNN predicts with standard deviation $0.001716$ against a target standard deviation of $0.030938$. It is not making bold forecasts that happen to be wrong; it is declining to forecast, which is the rational response to its loss function given this data.
+
+This produces a decomposition that explains the whole table. Write the prediction as $\hat{y} = \lambda \cdot s$, where $s$ is a signal and $\lambda \in [0,1]$ a shrinkage factor. Absolute error is then driven by two terms: a baseline $|y|$ that no model can reduce, and a penalty proportional to $\lambda$ for every unit of prediction that points the wrong way. When $s$ contains no information, the second term is pure cost and MAE is minimised at $\lambda = 0$. The observed near-monotonic relationship between dispersion ratio and MAE in Table~\ref{tab:shrink} is this relationship made visible.
+
+Persistence is the decisive case. It is the only method with $\lambda \approx 1$, predicting at full target scale, and it has by far the worst MAE ($0.030525$ versus $0.020869$). Its IC, $+0.0062$, is no worse than MTGNN's $-0.0081$. Persistence is not a worse \emph{forecaster} than MTGNN; it is a less \emph{hedged} one, and on this metric hedging is what pays. Symmetrically, LSTM shrinks least among the trained models ($\lambda = 0.183$) and is the worst trained model, significantly worse than zero at $p = 0.0009$. Its larger error is a direct consequence of its larger prediction variance, not of a worse-quality signal.
+
+The practical consequence is that \textbf{MAE and RMSE cannot rank models on this task}. They measure willingness to commit, not forecast quality. Had we reported Table~\ref{tab:main} without the naive references and without the dispersion column, the natural conclusion would have been ``VAR wins, MTGNN is competitive, LSTM is weak''. All three readings would have been wrong. This is why we treat the inclusion of uninformative references as a methodological result rather than a formality.
+
+\subsection{Why the graph contributes nothing}
+
+The ablation is the cleanest finding in the study. Four ways of obtaining an adjacency matrix, namely gradient-based joint learning, evolutionary search, a static correlation matrix, and the identity, produce test MAEs within $2.0 \times 10^{-5}$ of each other, with the identity nominally best. Since the identity disables inter-company message passing entirely, the graph machinery is contributing nothing measurable.
+
+The explanation is not that the graphs are poor, but that the objective is insensitive to them. Consider what a graph convolution does: it replaces a node's representation with a weighted combination of its neighbours' representations. This can only help if a neighbour's recent history carries information about this node's next return that the node's own history does not. Our IC results indicate there is essentially no such information to propagate at a one-day horizon. The graph is a mechanism for routing signal, and there is no signal to route.
+
+This also explains a result that looks paradoxical in isolation: the learned graph is nearly \emph{uninterpretable} ($51.2\%$ within-sector, against a $47.4\%$ random baseline) while the fixed correlation graph is strongly structured ($89.8\%$), yet both forecast identically. A gradient only shapes a parameter if moving that parameter changes the loss. Because the forecasting loss is effectively flat with respect to the adjacency matrix, the gradient reaching the node embeddings is dominated by noise, and the embeddings drift to an arbitrary configuration. The learned graph is not a discovered economic structure; it is an unconstrained parameter that training never had a reason to organise.
+
+The edge-level detail supports this reading. The learned graph's strongest edges include ASML$\rightarrow$LRCX and TSM$\rightarrow$LRCX, which are defensible: these are semiconductor capital-equipment suppliers and a foundry sharing a capital-expenditure cycle. But the same graph asserts TSM$\rightarrow$MOS, TSM$\rightarrow$ANDE and KLAC$\rightarrow$MOS, claiming a Taiwanese foundry and a wafer-inspection company predict a fertiliser producer and a grain merchant. There is no mechanism by which that could hold at a one-day horizon. A model fitting genuine structure should not produce a mixture of the sensible and the absurd at comparable edge weights; a model fitting noise should, and does.
+
+The correlation graph, by contrast, recovers coherent economic clusters (the MOS/CF/NTR fertiliser group, BG$\rightarrow$ADM among commodity processors, CTVA$\rightarrow$FMC among crop-protection firms) because correlation of contemporaneous returns genuinely does reflect shared exposure. The instructive point is that this real structure still yields no forecasting benefit. Contemporaneous co-movement is not a predictive lead-lag relationship: knowing that two fertiliser producers move together does not tell you which way either moves tomorrow. Our method correctly identified relationships that exist and are nonetheless useless for the task, which is a sharper negative result than simply failing to find structure.
+
+\subsection{Why gradient descent and CMA-ES tie}
+
+Our title question asks whether learned graphs beat a naive CMA-ES optimizer. The answer is that they tie, and the reason matters.
+
+CMA-ES searched the identical node-embedding parameterization that MTGNN learns by gradient, so the comparison isolates the optimizer. It converged properly: validation MAE fell from $0.018083$ to $0.018009$ over 1{,}920 evaluations in a preliminary run, with most of the improvement in the first 1{,}000, indicating the search was not truncated prematurely. Its test MAE, $0.020951 \pm 0.000037$, is statistically indistinguishable from MTGNN's $0.020948 \pm 0.000018$ ($p = 0.85$), and its graph is similarly unstructured ($57.3\%$ within-sector).
+
+Two very different optimizers, one following local gradients and one sampling a adapting Gaussian population, converged to the same forecasting performance and to similarly arbitrary structure. That coincidence is strong evidence the limitation is the \emph{objective}, not the search procedure. When an objective is genuinely flat, every optimizer reaches the same plateau, and which one you use is irrelevant. Had CMA-ES found a materially better graph, it would have implied gradient descent was getting stuck in poor local optima; had it found a much worse one, it would have implied the gradient was providing useful guidance. Neither happened.
+
+The cost comparison does separate them, and decisively against CMA-ES. Each fitness evaluation requires a full forward pass over the validation set, so 800 evaluations cost roughly 11 minutes per seed, \emph{on top of} a pretrained backbone and a final retraining fit. MTGNN obtains its graph for free as a by-product of ordinary training. For equal accuracy, derivative-free search is several times more expensive, and the gap would widen with more nodes: the search space grows as $2Nd$ while CMA-ES sample efficiency degrades with dimension. We see no setting in this application where it would be the preferable choice.
+
+One caveat limits how far this generalises. During the search the backbone was frozen, so CMA-ES found a graph suited to an already-trained forecaster rather than co-adapting the two, as MTGNN does. A protocol retraining the backbone inside every fitness evaluation would be a fairer comparison, but at three to four orders of magnitude more compute it was not affordable. Our result therefore says CMA-ES is not \emph{better} under a realistic budget, not that it could never be better under an unlimited one.
+
+\subsection{Why error rises with volatility without implying model failure}
+
+Table~\ref{tab:vol} shows MAE growing $2.8\times$ from the calmest to the most volatile quartile. It would be easy to read this as the model breaking down under stress. It is not.
+
+The zero forecast's error grows at an almost identical rate across the same buckets ($0.012139 \rightarrow 0.033712$ against MTGNN's $0.012138 \rightarrow 0.033882$). Since the zero forecast has no parameters and cannot degrade, the growth must be a property of the target rather than the model: absolute error is bounded below by $|y|$, and $|y|$ is larger when volatility is higher. Any forecaster, good or bad, shows this pattern. Reporting it without the zero-forecast comparison would have produced a confident but spurious claim about regime sensitivity.
+
+What \emph{is} informative is directional accuracy across the same buckets, which decays monotonically from $0.5307$ to $0.4959$, crossing below chance in the most volatile quartile. Direction is scale-free, so this is not a mechanical artefact. The plausible interpretation is that the weak cross-sectional relationships the model relies on are themselves regime-dependent: whatever mild co-movement structure exists in calm markets reorganises when volatility spikes and correlations converge towards one. This is the non-stationarity we identified as a research gap in Section~\ref{sec:motivation}, appearing in the data. We note it is a small effect on a short test period and we would not claim it as established.
+
+The per-company results point the same way. MTGNN beats the zero forecast on 5 of 20 names, and those five (NTR, CTVA, ANDE, CF, TSM) are mostly among the lower-volatility names, with margins never exceeding $1.1\%$. With 20 companies, 5 wins is within what coin-flipping produces.
+
+\subsection{Why the portfolio results invert the accuracy ranking}
+
+The portfolio evaluation reverses the accuracy table, and the reason is instructive about evaluation design generally.
+
+The zero forecast posts the best net Sharpe ratio ($1.694$) while being, by construction, the least informative predictor in the study. This is a pure artefact: with identical predictions across companies, the top-5/bottom-5 ranking is resolved by \texttt{argsort} tie-breaking, which means by the order companies appear in our data file. We verified the resulting basket is constant on all 271 test days. Its Sharpe ratio measures the performance of one arbitrary fixed long-short bet that happened to work over this particular window. Had we not checked for degeneracy, this number would have appeared in our results as the strongest financial performance in the study, produced by a model containing no information at all. We regard catching this as a better illustration of backtest fragility \parencite{lopezdeprado2014backtest} than any result we could have obtained deliberately.
+
+VAR's $1.186$ is the same mechanism in milder form: a constant per-company forecast produces a static basket, turnover $0.007$ against roughly $3.1$ for the time-varying models. It is a buy-and-hold tilt towards companies with high training-period drift, not a strategy.
+
+Among models that genuinely trade, all have negative net Sharpe ratios, and turnover explains the magnitude almost exactly. They rebalance the full book daily at roughly $3.1$ units of turnover, which at 5 bps per side costs about $1.0$ of annualised Sharpe. MTGNN's gross $+0.292$ becomes $-0.679$ net. The accuracy and portfolio results agree once costs are included: a signal that is not statistically distinguishable from zero cannot survive realistic trading frictions, because the frictions are certain while the signal is not.
+
+\subsection{Was the experiment capable of detecting a positive result?}
+
+A negative result is only meaningful if the setup could have produced a positive one. We consider the main threats.
+
+\paragraph{Insufficient capacity.} MTGNN has 33{,}169 trainable parameters against LSTM's 51{,}009, so the graph model is not the smaller one, and it was never close to its capacity ceiling. Training loss reached $0.00094$ while validation MAE plateaued at $0.0180$, a large gap, meaning the model had ample capacity to fit the training data and simply could not generalise. Underfitting is not the explanation.
+
+\paragraph{Insufficient training.} Early stopping triggered between epochs 33 and 56 across configurations, with best epochs between 18 and 41, so training ran well past the point of validation improvement. More epochs would increase overfitting, not performance.
+
+\paragraph{A short sample.} This is the most substantive limitation. Restricting to the window where all 20 companies exist left 1{,}806 days, of which 271 are test. A longer history would give tighter intervals. However, the issue is not that our intervals are too wide to detect a real effect; it is that the point estimates themselves are at or below zero. MTGNN's IC is $-0.0081$. More data would estimate a near-zero or negative quantity more precisely, not turn it positive.
+
+\paragraph{An unlucky test window.} Our test period is a single contiguous stretch of roughly one year. A rolling-origin evaluation across multiple windows would be more robust, and we would recommend it as the first extension. That said, the ablation conclusion is window-independent: the learned, correlation, identity and CMA-ES graphs were all evaluated on the \emph{same} window and are indistinguishable from each other, so no choice of window could make the graph matter.
+
+\paragraph{The wrong task framing.} We think this is the most likely explanation for the negative result, and it is where we would direct future work. Next-day return forecasting may simply be the wrong target for graph methods. Volatility and realised correlation are substantially more persistent and predictable than returns, and both are intrinsically relational quantities. A graph that is useless for predicting tomorrow's return direction may be genuinely useful for predicting tomorrow's covariance structure. Longer horizons, where fundamental linkages have time to propagate along a supply chain, are similarly more promising than a one-day horizon dominated by microstructure noise.
+
+\subsection{Relation to prior work}
+
+Our findings are consistent with both the graph-learning literature and the return-predictability literature once the difference in setting is taken seriously.
+
+MTGNN \parencite{wu2020mtgnn} and GTS \parencite{shang2021gts} report clear gains on traffic and weather benchmarks. Those signals are strong, spatially smooth and near-stationary; a sensor's neighbours genuinely do carry information about its next reading, so there is real signal for a learned graph to route. Our results do not contradict theirs. They indicate that the benefit of graph structure learning is contingent on the signal-to-noise ratio of the target, and that this contingency is not visible from the original papers because their benchmarks all sit at the favourable end of that spectrum.
+
+Equally, our results are what the finance literature would predict. Weak-form efficiency \parencite{fama1970efficient} implies past prices should not predict future returns, and comprehensive out-of-sample studies of return predictability find performance at or below naive benchmarks \parencite{welch2008comprehensive}. From that perspective the interesting observation is not that MTGNN failed, but that its failure mode is so orderly: it shrank towards the unconditional mean, which is precisely the optimal response to an unpredictable target under squared loss.
+
+Finally, our experience supports the methodological warnings of \textcite{harvey2016cross} and \textcite{lopezdeprado2014backtest}. We encountered three distinct ways in which this study could have reported a false positive: ranking by MAE, where shrinkage masquerades as skill; reporting VAR's directional accuracy without noticing AIC had selected zero lags; and reporting the zero forecast's Sharpe ratio of $1.694$ without noticing it came from an \texttt{argsort} tie-break. Each was caught only because an uninformative reference was in the table next to it. In a low signal-to-noise domain, the baselines are not a formality that precedes the real experiment. They are the instrument that makes the experiment readable.

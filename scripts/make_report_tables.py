@@ -28,12 +28,20 @@ ROW_ORDER = [
 ]
 
 
-def fmt(agg, key, dec=5):
+def fmt(agg, key, dec=5, scale=1.0, n_runs=1):
+    """Format mean +/- std, omitting the std for single-run deterministic models.
+
+    MAE and RMSE differences between models appear in the fifth decimal place,
+    so the table is scaled to units of 1e-3 to keep that precision without
+    overflowing the text width.
+    """
     if key not in agg:
         return "--"
-    m, s = agg[key]["mean"], agg[key]["std"]
+    m, s = agg[key]["mean"] * scale, agg[key]["std"] * scale
     if np.isnan(m):
         return "--"
+    if n_runs <= 1:
+        return f"${m:.{dec}f}$"
     return f"${m:.{dec}f} \\pm {s:.{dec}f}$"
 
 
@@ -55,18 +63,21 @@ def main():
 
     # --- Main results table ---
     lines = [
+        r"\small",
         r"\begin{tabular}{lcccc}",
         r"\toprule",
-        r"Model & MAE & RMSE & Directional acc. & IC \\",
+        r"Model & MAE ($\times 10^{-3}$) & RMSE ($\times 10^{-3}$) & Dir.\ acc. & IC \\",
         r"\midrule",
     ]
     for key, label in ROW_ORDER:
         if key not in results:
             continue
         a = results[key]["aggregate"]
+        n = len(results[key]["seeds"])
         lines.append(
-            f"{label} & {fmt(a,'mae')} & {fmt(a,'rmse')} & "
-            f"{fmt(a,'directional_accuracy',4)} & {fmt(a,'information_coefficient',4)} \\\\"
+            f"{label} & {fmt(a,'mae',3,1e3,n)} & {fmt(a,'rmse',3,1e3,n)} & "
+            f"{fmt(a,'directional_accuracy',4,1.0,n)} & "
+            f"{fmt(a,'information_coefficient',4,1.0,n)} \\\\"
         )
     lines += [r"\bottomrule", r"\end{tabular}"]
     (tabdir / "main_results.tex").write_text("\n".join(lines))

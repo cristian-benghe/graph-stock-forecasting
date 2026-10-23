@@ -50,8 +50,8 @@ def ic_confidence_interval(y_true, y_pred, alpha=0.05):
     r = float(np.nanmean(daily))
     n = len(daily)
     se = daily.std(ddof=1) / np.sqrt(n)
-    from math import sqrt
-    z = 1.959963985  # two-sided 95%
+
+    z = 1.959963985  # two-sided 95% normal quantile
     return r, (r - z * se, r + z * se), n
 
 

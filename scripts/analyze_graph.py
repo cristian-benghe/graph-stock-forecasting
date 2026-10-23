@@ -8,6 +8,8 @@ import sys
 sys.path.insert(0, ".")
 
 import json
+
+import numpy as np
 from pathlib import Path
 
 import matplotlib
@@ -77,18 +79,38 @@ def top_edges(adj, tickers, sectors, k=15):
     return edges[:k]
 
 
+def sector_ordering(tickers, cfg):
+    """Permutation grouping semiconductors first, then agriculture.
+
+    The downloaded panel stores tickers alphabetically, so plotting the raw
+    matrix interleaves the two industries and any sector separator line drawn at
+    index 10 would be meaningless. Reordering makes block structure, if present,
+    visible on the diagonal.
+    """
+    semis = [t for t in cfg["data"]["semiconductors"] if t in tickers]
+    agri = [t for t in cfg["data"]["agriculture"] if t in tickers]
+    ordered = semis + agri
+    missing = [t for t in tickers if t not in ordered]
+    ordered += missing
+    idx = [tickers.index(t) for t in ordered]
+    return idx, ordered, len(semis)
+
+
 def plot_heatmap(adj, tickers, cfg, title, out_path):
-    n_semi = len(cfg["data"]["semiconductors"])
+    idx, labels, n_semi = sector_ordering(tickers, cfg)
+    adj = adj[np.ix_(idx, idx)]
+
     fig, ax = plt.subplots(figsize=(9, 7.5))
     im = ax.imshow(adj, cmap="viridis", aspect="equal")
-    ax.set_xticks(range(len(tickers)), tickers, rotation=90, fontsize=8)
-    ax.set_yticks(range(len(tickers)), tickers, fontsize=8)
-    # Separator between the two sectors
-    ax.axhline(n_semi - 0.5, color="red", lw=1.4)
-    ax.axvline(n_semi - 0.5, color="red", lw=1.4)
-    ax.set_xlabel("source node j (information flows j → i)")
-    ax.set_ylabel("target node i")
-    ax.set_title(title)
+    ax.set_xticks(range(len(labels)), labels, rotation=90, fontsize=8)
+    ax.set_yticks(range(len(labels)), labels, fontsize=8)
+    # Boundary between the two industries, valid only after reordering
+    ax.axhline(n_semi - 0.5, color="red", lw=1.5)
+    ax.axvline(n_semi - 0.5, color="red", lw=1.5)
+    ax.set_xlabel("source node $j$   (information flows $j \\rightarrow i$)")
+    ax.set_ylabel("target node $i$")
+    ax.set_title(f"{title}\nnodes ordered: semiconductors (first {n_semi}), "
+                 f"then agriculture", fontsize=10)
     fig.colorbar(im, ax=ax, label="edge weight", fraction=0.046)
     fig.tight_layout()
     fig.savefig(out_path, dpi=180)
