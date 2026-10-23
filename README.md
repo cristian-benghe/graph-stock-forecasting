@@ -1,66 +1,105 @@
 # Graph-Based Financial Forecasting
 
 **TU Delft - DSAIT4305 Graph Machine Learning**
-**Group 21**: Benghe Cristian, Ciuntu Sorin-Andrei, Darie Dan, Jonsson Arnar, Petriceanu Alexandru
+**Group 21**: Benghe Cristian, Ciuntu Sorin-Andrei, Darie Dan, Jónsson Arnar, Petriceanu Alexandru
 
-Can learned graphs used in GNNs beat a naive CMA-ES optimizer in financial forecasting?
+> Can a jointly learned graph improve multivariate stock-return forecasting compared with
+> conventional time-series models and a derivative-free graph-search approach?
 
-## Project Structure
-
-```
-project/
-├── configs/
-│   └── default.yaml          # All hyperparameters and ticker lists
-├── src/
-│   ├── data/
-│   │   ├── download.py        # Fetch stock data from Yahoo Finance
-│   │   ├── features.py        # Log returns, rolling volatility, normalized volume
-│   │   └── dataset.py         # Sliding-window PyTorch dataset
-│   ├── models/
-│   │   ├── mtgnn.py           # MTGNN (Wu et al., 2020) with learned graph
-│   │   └── lstm.py            # LSTM baseline (no graph)
-│   ├── baselines/
-│   │   ├── var.py             # Vector Autoregression baseline
-│   │   └── cmaes_search.py    # CMA-ES derivative-free graph search
-│   └── evaluation/
-│       └── metrics.py         # MAE, RMSE, directional accuracy, Sharpe
-├── scripts/
-│   ├── download_data.py       # Step 1: download and preprocess data
-│   └── train_mtgnn.py         # Step 2: train MTGNN
-└── notebooks/                 # Exploration and visualization
-```
-
-## Quick Start
+## Setup
 
 ```bash
-pip install -r requirements.txt
-
-# 1. Download and preprocess stock data
-python scripts/download_data.py
-
-# 2. Train MTGNN
-python scripts/train_mtgnn.py
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
+
+## Running
+
+```bash
+# 1. Download prices and build the feature tensor (writes data/processed/)
+.venv/bin/python scripts/download_data.py
+
+# 2. Run every model across all seeds (writes outputs/results.json)
+.venv/bin/python scripts/run_experiments.py
+
+# 3. Generate LaTeX tables and comparison figures
+.venv/bin/python scripts/make_report_tables.py
+
+# 4. Graph analysis: within- vs cross-industry edges, heatmaps
+.venv/bin/python scripts/analyze_graph.py
+
+# 5. Error analysis: error by volatility quartile and per company
+.venv/bin/python scripts/error_analysis.py
+```
+
+Subsets can be run with `--models`, e.g. `--models mtgnn ablation`.
+`--quick` runs one seed with few epochs as a smoke test.
 
 ## Models
 
-| Model | Type | Graph |
-|-------|------|-------|
-| **MTGNN** | GNN + temporal conv | Learned end-to-end |
-| **LSTM** | Recurrent neural net | None |
-| **VAR** | Linear multivariate | None |
-| **CMA-ES + GNN** | Evolutionary search | Optimized by CMA-ES |
+| Model | Graph | What it isolates |
+|-------|-------|------------------|
+| Zero forecast | none | Reference with no information by construction |
+| Persistence | none | Random-walk reference |
+| VAR | none (dense linear) | Linear cross-company dependence |
+| LSTM | none | Nonlinear temporal structure, no message passing |
+| MTGNN (identity) | `I` | Temporal backbone only, message passing disabled |
+| MTGNN (correlation) | fixed, from train correlations | Having a graph, but not learning it |
+| MTGNN (CMA-ES) | evolutionary search | Derivative-free graph search |
+| **MTGNN (learned)** | learned end-to-end | The full method |
+
+Every graph variant shares one backbone, so differences are attributable to the
+graph rather than the architecture.
 
 ## Data
 
-20 companies across two industries (10 semiconductor, 10 agriculture). Daily data from 2015-2026.
+20 companies, 10 semiconductor and 10 agriculture, daily from Yahoo Finance.
 
-**Features per node**: log return, rolling volatility, normalized volume.
+The usable window starts **2019-05-24**, not 2015: Nutrien was formed by the 2018
+Agrium/PotashCorp merger and Corteva was spun off from DowDuPont in May 2019, so
+earlier dates have no data for those two. `download_data.py` trims to the window
+where all 20 series exist and raises rather than silently emitting NaNs.
+After feature warm-up this gives 1,806 trading days.
 
-**Task**: Node-level regression. Given a 20-day window of all companies, predict next-day log returns.
+Three features per node: log return, 20-day rolling volatility, volume z-scored
+against its own trailing 20-day window. All causal.
 
 ## Evaluation
 
-- **MAE** and **RMSE** for forecast accuracy
-- **Directional accuracy** for up/down prediction
-- **Sharpe ratio** for optional portfolio evaluation
+Chronological 70/15/15 split, no shuffling. Normalization fitted on training data
+only. Checkpoints selected on validation; test set evaluated once. Three seeds
+(42, 123, 456), reported as mean ± std.
+
+Metrics: MAE, RMSE, directional accuracy, and information coefficient (IC).
+
+> **Reading the numbers:** daily returns are close to unpredictable, so MAE and
+> RMSE are minimised by predicting near-zero. The zero-forecast row is therefore
+> load-bearing: a model is only forecasting if it beats it on IC or directional
+> accuracy, not just on error magnitude.
+
+## Report
+
+LaTeX sources in `report/`. Build with:
+
+```bash
+cd report && pdflatex Main.tex && biber Main && pdflatex Main.tex && pdflatex Main.tex
+```
+
+Tables and figures under `outputs/` are generated by the scripts above, so the
+report's numbers come from measured results rather than being typed by hand.
+
+## Layout
+
+```
+project/
+├── configs/default.yaml        # tickers, hyperparameters, splits, seeds
+├── src/
+│   ├── data/                   # download, features, sliding-window dataset
+│   ├── models/                 # mtgnn.py, lstm.py
+│   ├── baselines/              # var, cmaes_search, correlation_graph, naive
+│   ├── training/trainer.py     # shared training loop, early stopping
+│   └── evaluation/metrics.py   # MAE, RMSE, DA, IC, seed aggregation
+├── scripts/                    # runnable entry points (see Running)
+├── report/                     # LaTeX report
+└── outputs/                    # results.json, figures, tables (gitignored)
+```
