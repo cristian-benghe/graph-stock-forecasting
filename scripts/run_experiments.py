@@ -349,8 +349,11 @@ def main():
         extras["cmaes_search"] = searches
 
     if preds_store:
-        np.savez_compressed("outputs/predictions.npz", **preds_store)
-        print(f"\nSaved {len(preds_store)//2} prediction sets to outputs/predictions.npz")
+        # Derived from --out so parallel shards do not overwrite each other;
+        # scripts/merge_results.py recombines them.
+        pred_path = Path(args.out).with_suffix("").as_posix() + "_predictions.npz"
+        np.savez_compressed(pred_path, **preds_store)
+        print(f"\nSaved {len(preds_store)//2} prediction sets to {pred_path}")
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
