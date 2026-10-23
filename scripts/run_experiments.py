@@ -18,7 +18,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from src.baselines.cmaes_search import run_cmaes_search, decode_adjacency
+from src.baselines.cmaes_search import run_cmaes_search
 from src.baselines.correlation_graph import correlation_adjacency, identity_adjacency
 from src.baselines.naive import (
     persistence_forecast,

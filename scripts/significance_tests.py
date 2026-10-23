@@ -111,7 +111,7 @@ def main():
             results[f"{n}_vs_{REFERENCE}"] = r
             print(f"{n:22s} {r['statistic']:>10.3f} {r['p_value']:>10.4f}  {verdict}")
 
-    print(f"\n=== Pairwise comparisons among the graph variants (MAE loss) ===")
+    print("\n=== Pairwise comparisons among the graph variants (MAE loss) ===")
     graph_models = [n for n in
                     ["MTGNN", "MTGNN-CorrGraph", "MTGNN-Identity", "CMA-ES"]
                     if n in models]

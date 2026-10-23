@@ -20,7 +20,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from src.data.dataset import chronological_split, segment_offset
-from src.evaluation.metrics import directional_accuracy, mae
+from src.evaluation.metrics import directional_accuracy
 from src.models.mtgnn import MTGNN
 from src.training.trainer import predict, set_seed, train_model
 
