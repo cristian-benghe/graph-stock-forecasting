@@ -254,6 +254,10 @@ def main():
     ap.add_argument("--models", nargs="+", default=["all"])
     ap.add_argument("--out", default="outputs/results.json")
     ap.add_argument("--quick", action="store_true", help="1 seed, few epochs, for smoke tests")
+    ap.add_argument("--seeds", nargs="+", type=int, default=None,
+                    help="override config seeds; lets one seed run per process")
+    ap.add_argument("--cmaes-evals", type=int, default=None,
+                    help="override the CMA-ES evaluation budget")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -261,7 +265,9 @@ def main():
     data = np.load("data/processed/features.npy")
     tickers = Path("data/processed/tickers.txt").read_text().split()
 
-    seeds = cfg["evaluation"]["seeds"]
+    seeds = args.seeds if args.seeds else cfg["evaluation"]["seeds"]
+    if args.cmaes_evals:
+        cfg["cmaes"]["max_evaluations"] = args.cmaes_evals
     if args.quick:
         seeds = seeds[:1]
         cfg["mtgnn"]["epochs"] = 3

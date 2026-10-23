@@ -27,16 +27,15 @@ def main():
 
     print(f"Merging {len(shards)} shards:")
     merged_results, merged_extras, base = {}, {}, None
-    seeds = None
+    all_seeds = set()
 
     for path in shards:
         payload = json.loads(path.read_text())
         names = list(payload["results"])
-        print(f"  {path.name:28s} -> {names}")
+        print(f"  {path.name:28s} seeds={payload['seeds']} -> {names}")
 
         if base is None:
             base = {k: payload[k] for k in ("config", "data_shape", "tickers")}
-            seeds = payload["seeds"]
         else:
             if payload["data_shape"] != base["data_shape"]:
                 raise SystemExit(
@@ -44,22 +43,33 @@ def main():
                 )
             if payload["tickers"] != base["tickers"]:
                 raise SystemExit(f"{path.name}: ticker order differs")
-            if payload["seeds"] != seeds:
-                raise SystemExit(f"{path.name}: seeds {payload['seeds']} != {seeds}")
+        all_seeds.update(payload["seeds"])
 
+        # A model may be split across shards by seed (one process per seed),
+        # so concatenate its per-seed runs rather than treating it as a clash.
         for name, res in payload["results"].items():
             if name in merged_results:
-                raise SystemExit(f"duplicate model '{name}' in {path.name}")
-            merged_results[name] = res
-        merged_extras.update(payload.get("extras", {}))
+                merged_results[name]["seeds"].extend(res["seeds"])
+            else:
+                merged_results[name] = {"seeds": list(res["seeds"])}
+
+        for k, v in payload.get("extras", {}).items():
+            merged_extras.setdefault(k, []).extend(v if isinstance(v, list) else [v])
+
+    # Recompute aggregates from the combined per-seed runs
+    from src.evaluation.metrics import aggregate_seeds
+    for name, res in merged_results.items():
+        res["aggregate"] = aggregate_seeds(res["seeds"])
 
     OUT_RESULTS.write_text(json.dumps({
         **base,
-        "seeds": seeds,
+        "seeds": sorted(all_seeds),
         "results": merged_results,
         "extras": merged_extras,
     }, indent=2, default=str))
     print(f"\nWrote {OUT_RESULTS} with {len(merged_results)} models")
+    for name, res in merged_results.items():
+        print(f"  {name:22s} {len(res['seeds'])} run(s)")
 
     # --- Merge predictions, verifying every shard scored the same targets ---
     pred_files = sorted(Path().glob("outputs/shard_*_predictions.npz"))
