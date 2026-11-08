@@ -51,3 +51,7 @@ report/tables/
 report/figures/graph_*.png
 report/figures/metric_comparison.png
 report/figures/error_analysis.png
+
+# Report lives in Overleaf, not in this repo
+report/
+scripts/make_report_tables.py
