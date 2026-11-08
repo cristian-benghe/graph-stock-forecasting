@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 
 from src.baselines.cmaes_search import run_cmaes_search
 from src.baselines.correlation_graph import correlation_adjacency, identity_adjacency
+from src.baselines.graph_baselines import knn_adjacency, random_adjacency
 from src.baselines.naive import (
     persistence_forecast,
     train_mean_forecast,
@@ -380,6 +381,28 @@ def main():
             runs.append(mt)
             _store(preds_store, "MTGNN-Identity", s, *p)
         results["MTGNN-Identity"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
+
+    if run_this("graphbase"):
+        k = cfg["mtgnn"]["top_k"]
+        print("\n=== Graph baseline: kNN on correlation distance ===")
+        knn = knn_adjacency(data[:train_end, :, 0], k=k)
+        runs = []
+        for s in seeds:
+            mt, _, p = run_mtgnn(data, cfg, s, device, adj=knn, label="kNN-graph")
+            runs.append(mt)
+            _store(preds_store, "MTGNN-kNN", s, *p)
+        results["MTGNN-kNN"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
+        torch.save({"adjacency": knn, "tickers": tickers}, "outputs/knn_graph.pt")
+
+        print("\n=== Graph baseline: random k-regular graph ===")
+        rnd = random_adjacency(data.shape[1], k=k, seed=42)
+        runs = []
+        for s in seeds:
+            mt, _, p = run_mtgnn(data, cfg, s, device, adj=rnd, label="Random-graph")
+            runs.append(mt)
+            _store(preds_store, "MTGNN-Random", s, *p)
+        results["MTGNN-Random"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
+        torch.save({"adjacency": rnd, "tickers": tickers}, "outputs/random_graph.pt")
 
     if run_this("cmaes"):
         print("\n=== CMA-ES graph search ===")
