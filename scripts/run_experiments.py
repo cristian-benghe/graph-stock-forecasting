@@ -29,6 +29,7 @@ from src.baselines.var import VARForecaster
 from src.data.dataset import chronological_split, segment_offset
 from src.evaluation.metrics import aggregate_seeds, evaluate_all
 from src.models.lstm import LSTMForecaster
+from src.models.mlp import MLPForecaster
 from src.models.mtgnn import MTGNN
 from src.training.trainer import predict, set_seed, train_model
 
@@ -133,6 +134,38 @@ def run_lstm(data, cfg, seed, device):
     metrics["train_seconds"] = train_seconds
     metrics["best_epoch"] = out["best_epoch"]
     print(f"  [LSTM seed {seed}] test MAE {metrics['mae']:.6f} "
+          f"DA {metrics['directional_accuracy']:.4f} IC {metrics['information_coefficient']:+.4f}")
+    return metrics, (y_true, y_pred)
+
+
+def run_mlp(data, cfg, seed, device):
+    """Per-node MLP: no graph, no convolution, no recurrence."""
+    set_seed(seed)
+    l = cfg["lstm"]  # reuse the same hidden size / lr / epochs for comparability
+    train_loader, val_loader, test_loader, _, _ = build_loaders(data, cfg, l["batch_size"])
+
+    model = MLPForecaster(
+        num_nodes=data.shape[1],
+        in_features=data.shape[2],
+        window_size=cfg["features"]["window_size"],
+        hidden_size=l["hidden_size"],
+        num_layers=l["num_layers"],
+        dropout=l["dropout"],
+    )
+
+    t0 = time.time()
+    out = train_model(
+        model, train_loader, val_loader,
+        epochs=l["epochs"], learning_rate=l["learning_rate"],
+        device=device, verbose=False,
+    )
+    train_seconds = time.time() - t0
+
+    y_true, y_pred = predict(out["model"], test_loader, device)
+    metrics = evaluate_all(y_true, y_pred)
+    metrics["train_seconds"] = train_seconds
+    metrics["best_epoch"] = out["best_epoch"]
+    print(f"  [MLP seed {seed}] test MAE {metrics['mae']:.6f} "
           f"DA {metrics['directional_accuracy']:.4f} IC {metrics['information_coefficient']:+.4f}")
     return metrics, (y_true, y_pred)
 
@@ -306,6 +339,15 @@ def main():
             runs.append(mt)
             _store(preds_store, "LSTM", s, *p)
         results["LSTM"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
+
+    if run_this("mlp"):
+        print("\n=== MLP (no graph, no convolution) ===")
+        runs = []
+        for s in seeds:
+            mt, p = run_mlp(data, cfg, s, device)
+            runs.append(mt)
+            _store(preds_store, "MLP", s, *p)
+        results["MLP"] = {"seeds": runs, "aggregate": aggregate_seeds(runs)}
 
     if run_this("mtgnn"):
         print("\n=== MTGNN (learned graph) ===")

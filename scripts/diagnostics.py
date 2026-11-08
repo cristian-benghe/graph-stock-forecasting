@@ -27,7 +27,7 @@ import numpy as np
 
 from scripts.significance_tests import load_predictions, pooled
 
-ORDER = ["Zero", "Persistence", "TrainMean", "VAR", "LSTM",
+ORDER = ["Zero", "Persistence", "TrainMean", "VAR", "MLP", "LSTM",
          "MTGNN-Identity", "MTGNN-CorrGraph", "CMA-ES", "MTGNN"]
 
 

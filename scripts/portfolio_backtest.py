@@ -94,7 +94,7 @@ def main():
         raise SystemExit("outputs/predictions.npz not found; run run_experiments.py first")
 
     models = load_predictions()
-    order = ["Zero", "Persistence", "TrainMean", "VAR", "LSTM",
+    order = ["Zero", "Persistence", "TrainMean", "VAR", "MLP", "LSTM",
              "MTGNN-Identity", "MTGNN-CorrGraph", "CMA-ES", "MTGNN"]
     names = [n for n in order if n in models] + [n for n in models if n not in order]
 
